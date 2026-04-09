@@ -1,90 +1,74 @@
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
-const fetch = require('node-fetch');
 
 const app = express();
 const PORT = 8080;
 
-// Load links
-let links = JSON.parse(fs.readFileSync('./links.json'));
+// Load links.json
+let links = JSON.parse(fs.readFileSync('./links.json', 'utf-8'));
 
-// Serve static assets (CSS, JS, images)
+// Serve static assets (optional)
 app.use('/assets', express.static(path.join(__dirname, 'sites')));
 
 // ----------------------
-// 🔹 ROUTER MODE (your system)
+// 🔥 MAIN .tango HANDLER
 // ----------------------
-app.get('/', (req, res) => {
-    const file = path.join(__dirname, 'sites', links["home"]);
-    res.sendFile(file);
-});
+app.use((req, res, next) => {
+    let host = req.headers.host || "";
 
-app.get('/:page', (req, res) => {
-    const page = req.params.page;
+    // Remove port (e.g. :8080)
+    host = host.split(":")[0].toLowerCase();
 
-    if (links[page]) {
-        const file = path.join(__dirname, 'sites', links[page]);
-        res.sendFile(file);
-    } else {
-        res.status(404).send("Page not found");
-    }
-});
+    console.log("Incoming host:", host);
 
-// ----------------------
-// 🌐 REAL PROXY MODE
-// ----------------------
-app.get('/proxy', async (req, res) => {
-    let target = req.query.url;
+    // Check if host exists in links.json
+    if (links[host]) {
+        const filePath = path.join(__dirname, links[host]);
 
-    if (!target) {
-        return res.send("Usage: /proxy?url=https://example.com");
-    }
+        // Security: prevent path escape
+        if (!filePath.startsWith(__dirname)) {
+            return res.status(403).send("Forbidden");
+        }
 
-    try {
-        const response = await fetch(target, {
-            headers: {
-                "User-Agent": "Mozilla/5.0"
+        fs.access(filePath, fs.constants.F_OK, (err) => {
+            if (err) {
+                return res.status(404).send("File not found");
             }
+
+            return res.sendFile(filePath);
         });
 
-        let body = await response.text();
-
-        // 🔧 Fix relative links (basic rewrite)
-        body = body.replace(/(href|src)="\//g, `$1="${target}/`);
-
-        res.send(body);
-    } catch (err) {
-        res.status(500).send("Proxy error: " + err.message);
+        return; // stop further routing
     }
+
+    next();
 });
 
 // ----------------------
-// 🔒 OPTIONAL BLOCK SYSTEM
+// 🔹 FALLBACK ROUTES
 // ----------------------
-const bannedWords = ["piracy", "torrent"];
+app.get('/', (req, res) => {
+    res.send("Proxy running. No mapping found.");
+});
 
-app.get('/search', (req, res) => {
-    const q = req.query.q || "";
-
-    for (let word of bannedWords) {
-        if (q.toLowerCase().includes(word)) {
-            return res.sendFile(path.join(__dirname, 'sites', 'blocked.html'));
-        }
-    }
-
-    res.redirect(`/proxy?url=https://www.google.com/search?q=${encodeURIComponent(q)}`);
+app.use((req, res) => {
+    res.status(404).send("Unknown .tango domain");
 });
 
 // ----------------------
-// 🔄 HOT RELOAD links.json
+// 🔄 AUTO RELOAD JSON
 // ----------------------
 fs.watchFile('./links.json', () => {
     console.log("Reloading links.json...");
-    links = JSON.parse(fs.readFileSync('./links.json'));
+    try {
+        links = JSON.parse(fs.readFileSync('./links.json', 'utf-8'));
+    } catch (e) {
+        console.error("Invalid JSON!");
+    }
 });
 
 // ----------------------
 app.listen(PORT, () => {
-    console.log(`Server running at http://localhost:${PORT}`);
+    console.log(`Server running on port ${PORT}`);
 });
